@@ -1,5 +1,6 @@
 streamlit
-pymupdf
 openai
+pymupdf
 pandas
+reportlab
 python-docx
