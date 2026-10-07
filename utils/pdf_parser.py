@@ -5,12 +5,7 @@ import docx
 
 def extract_structured_content(uploaded_file, start_page=1, end_page=None):
     """
-    解析 PDF 并返回结构化元素列表，格式为：
-    [
-      {"type": "text", "content": "英文段落..."},
-      {"type": "image", "data": b"bytes..."},
-      ...
-    ]
+    解析 PDF 并返回结构化元素列表（包含通过显式 API 提取的图片）
     """
     file_name = uploaded_file.name
     file_extension = file_name.split(".")[-1].lower()
@@ -30,27 +25,32 @@ def extract_structured_content(uploaded_file, start_page=1, end_page=None):
         
         for page_num in range(start_idx, end_idx):
             page = doc[page_num]
-            blocks = page.get_text("blocks")
-            
-            # 按双栏/纵向坐标排序
-            sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
-            
             elements.append({"type": "text", "content": f"\n--- Page {page_num + 1} ---\n"})
+            
+            # 1. 提取并排序文本块
+            blocks = page.get_text("blocks")
+            sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
             
             for b in sorted_blocks:
                 block_type = b[6] if len(b) > 6 else 0
-                if block_type == 0:  # 文本
+                if block_type == 0:
                     text = b[4].strip()
                     if text:
                         elements.append({"type": "text", "content": text})
-                elif block_type == 1:  # 图片
-                    try:
-                        xref = b[7] if len(b) > 7 else None
-                        base_image = doc.extract_image(xref) if xref else None
-                        if base_image:
-                            elements.append({"type": "image", "data": base_image["image"]})
-                    except Exception:
-                        pass
+            
+            # 2. 显式提取该页面的所有图片对象
+            image_list = page.get_images(full=True)
+            for img_info in image_list:
+                xref = img_info[0]
+                try:
+                    base_image = doc.extract_image(xref)
+                    if base_image:
+                        image_bytes = base_image["image"]
+                        # 过滤掉过小的图标/装饰图（小于 3KB 的通常是小图标），保留正文插图
+                        if len(image_bytes) > 3000:
+                            elements.append({"type": "image", "data": image_bytes})
+                except Exception:
+                    pass
                         
         return elements, total_pages
         
