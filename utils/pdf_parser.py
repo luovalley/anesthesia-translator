@@ -1,96 +1,106 @@
-# utils/pdf_parser.py
-import fitz  # PyMuPDF
 import os
-from docx import Document
+import fitz  # PyMuPDF
+import docx
 
-def extract_text_and_images_from_pdf(uploaded_file, start_page=1, end_page=1, image_output_dir="extracted_images"):
+def extract_text_from_file(uploaded_file, file_extension):
     """
-    高级 PDF 解析器：提取文本、保持版面顺序、提取并保存图片，实现图文混排的 Markdown 转换
+    通用文件解析入口：支持 PDF（双栏智能图文混排）、Word、Markdown、TXT
     """
-    os.makedirs(image_output_dir, exist_ok=True)
-    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    total_pages = len(doc)
-    
-    start_idx = max(0, start_page - 1)
-    end_idx = min(total_pages, end_page)
-    
-    structured_content = []
-    image_counter = 0
+    if file_extension == "pdf":
+        # 将 Streamlit 上传的文件对象转换为字节流供 PyMuPDF 读取
+        pdf_bytes = uploaded_file.read()
+        return parse_pdf_with_layout(pdf_bytes)
+    elif file_extension in ["docx", "doc"]:
+        doc = docx.Document(uploaded_file)
+        return "\n".join([p.text for p in doc.paragraphs])
+    elif file_extension in ["md", "txt"]:
+        return uploaded_file.read().decode("utf-8")
+    else:
+        return "不支持的文件格式。"
 
-    for page_num in range(start_idx, end_idx):
+def parse_pdf_with_layout(pdf_bytes, output_image_dir="extracted_images"):
+    """
+    针对双栏医学文献优化的 PDF 坐标块与图文混排解析器
+    """
+    os.makedirs(output_image_dir, exist_ok=True)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    full_markdown_content = []
+
+    for page_num in range(len(doc)):
         page = doc[page_num]
+        full_markdown_content.append(f"\n\n<!-- Page {page_num + 1} -->\n")
         
-        # 1. 获取页面所有文本块 (x0, y0, x1, y1, text, block_no, block_type)
-        # block_type: 0 代表文本, 1 代表图片
-        blocks = page.get_text("blocks")
+        page_width = page.rect.width
+        mid_x = page_width / 2.0
+
+        # 获取页面所有块 (blocks)，包含文本块和图片块
+        # blocks 结构: (x0, y0, x1, y1, text/image_info, block_no, block_type)
+        # block_type: 0 代表文本, 1 代表图像
+        blocks = page.get_text("blocks", sort=True)
+        
+        # 同时提取页面中的内嵌图片及其矩形框位置
+        image_list = page.get_images(full=True)
+        image_rects = []
+        for img_index, img_info in enumerate(image_list):
+            xref = img_info[0]
+            rects = page.get_image_rects(xref)
+            for r in rects:
+                # 保存图片到本地
+                pix = fitz.Pixmap(doc, xref)
+                if pix.n >= 5:  # 转换 CMYK 为 RGB
+                    pix = fitz.Pixmap(fitz.csRGB, pix)
+                img_filename = f"page_{page_num + 1}_img_{xref}_{img_index}.png"
+                img_path = os.path.join(output_image_dir, img_filename)
+                pix.save(img_path)
+                pix = None
+                
+                # 将图片矩形与路径记录下来
+                image_rects.append({
+                    "y0": r.y0,
+                    "x0": r.x0,
+                    "y1": r.y1,
+                    "path": img_path
+                })
+
+        # 整理所有需要参与排版的元素（文本块 + 图片）
+        # 统一格式化为：(y0, x0, content_type, sort_column, content_string)
         page_elements = []
-        
+
+        # 处理文本块并进行双栏归类
         for b in blocks:
             x0, y0, x1, y1, text, block_no, block_type = b
-            if block_type == 0 and text.strip():
+            if block_type == 0:  # 文本
+                cleaned_text = text.strip()
+                if not cleaned_text:
+                    continue
+                # 判定属于左栏 (0) 还是右栏 (1)
+                col = 0 if x0 < mid_x else 1
                 page_elements.append({
                     "y0": y0,
                     "x0": x0,
+                    "col": col,
                     "type": "text",
-                    "content": text.strip()
+                    "content": cleaned_text
                 })
-                
-        # 2. 获取页面中的嵌入图片及其实际位置
-        image_list = page.get_images(full=True)
-        for img_index, img in enumerate(image_list):
-            xref = img[0]
-            base_image = doc.extract_image(xref)
-            image_bytes = base_image["image"]
-            image_ext = base_image["ext"]
-            
-            # 寻找图片在页面中的坐标位置
-            img_rects = page.get_image_rects(xref)
-            y0 = img_rects[0].y0 if img_rects else 0.0
-            x0 = img_rects[0].x0 if img_rects else 0.0
-            
-            image_counter += 1
-            image_filename = f"page_{page_num + 1}_img_{image_counter}.{image_ext}"
-            image_filepath = os.path.join(image_output_dir, image_filename)
-            
-            with open(image_filepath, "wb") as f:
-                f.write(image_bytes)
-                
+
+        # 处理图片元素
+        for img in image_rects:
+            col = 0 if img["x0"] < mid_x else 1
+            img_markdown = f"\n\n![Figure]({img['path']})\n\n"
             page_elements.append({
-                "y0": y0,
-                "x0": x0,
+                "y0": img["y0"],
+                "x0": img["x0"],
+                "col": col,
                 "type": "image",
-                "content": f"\n\n![Figure {image_counter}]({image_output_dir}/{image_filename})\n\n"
+                "content": img_markdown
             })
-            
-        # 3. 按照垂直坐标 (y0) 从上到下、水平坐标 (x0) 从左到右对图文元素进行精确排序
-        page_elements.sort(key=lambda e: (e["y0"], e["x0"]))
-        
-        page_text_combined = "\n\n".join([elem["content"] for elem in page_elements])
-        structured_content.append(f"<!-- Page {page_num + 1} -->\n\n" + page_text_combined)
-        
-    full_structured_text = "\n\n---\n\n".join(structured_content)
-    return full_structured_text, total_pages
 
+        # 双栏核心排序算法：
+        # 先按栏目(col: 0 -> 1)排序，再按垂直高度(y0)排序，确保双栏内容不交织混乱
+        page_elements.sort(key=lambda e: (e["col"], e["y0"]))
 
-def extract_text_from_file(uploaded_file, start_page=1, end_page=1):
-    """
-    兼容原有其他格式文件读取的封装函数
-    """
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    
-    if file_extension == 'pdf':
-        return extract_text_and_images_from_pdf(uploaded_file, start_page, end_page)
-    elif file_extension in ['md', 'txt']:
-        bytes_data = uploaded_file.read()
-        for encoding in ['utf-8', 'gbk', 'latin-1']:
-            try:
-                return bytes_data.decode(encoding), 1
-            except UnicodeDecodeError:
-                continue
-        return "", 1
-    elif file_extension == 'docx':
-        doc = Document(uploaded_file)
-        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        return "\n\n".join(paragraphs), 1
-    else:
-        raise ValueError(f"不支持的文件格式: .{file_extension}")
+        # 组装当前页的 Markdown
+        page_text_blocks = [elem["content"] for elem in page_elements]
+        full_markdown_content.extend(page_text_blocks)
+
+    return "\n\n".join(full_markdown_content)
