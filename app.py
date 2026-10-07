@@ -44,9 +44,10 @@ with st.sidebar:
         "选择翻译大模型", 
         [
             "nvidia/nemotron-3-super-120b-a12b:free",
-            "anthropic/claude-3.5-sonnet:beta", 
-            "deepseek/deepseek-chat", 
-            "openai/gpt-4o"
+            "qwen/qwen3.8-27b:free", 
+            "google/gemma-4-31b-it:free", 
+            "apodex/apodex-1.1-mini:free",
+            "openrouter/free",
         ],
         index=0
     )
