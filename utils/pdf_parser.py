@@ -6,37 +6,38 @@ from docx.shared import Inches
 
 def extract_text_from_file(uploaded_file, start_page=1, end_page=None):
     """
-    适配 app.py 调用的统一入口：改为直接生成 Word 文档对象或字节流
+    统一入口：同时返回 Word 内存流、用于大模型翻译的纯文本、以及单元数
     """
     file_name = uploaded_file.name
     file_extension = file_name.split(".")[-1].lower()
     
     if file_extension == "pdf":
         pdf_bytes = uploaded_file.read()
-        doc_io = parse_pdf_to_docx(pdf_bytes, start_page=start_page, end_page=end_page)
-        # 估算大体字数用于进度条
-        total_units = 5000 
-        return doc_io, total_units
+        doc_io, plain_text = parse_pdf_to_docx_and_text(pdf_bytes, start_page=start_page, end_page=end_page)
+        return doc_io, plain_text, len(plain_text)
     elif file_extension in ["docx", "doc"]:
-        # 如果本身就是 docx，直接返回原文件字节流
-        return io.BytesIO(uploaded_file.read()), 1000
+        doc = docx.Document(uploaded_file)
+        plain_text = "\n".join([p.text for p in doc.paragraphs])
+        doc_io = io.BytesIO()
+        doc.save(doc_io)
+        doc_io.seek(0)
+        return doc_io, plain_text, len(plain_text)
     elif file_extension in ["md", "txt"]:
-        # 将文本转为简单的 Word 文档
-        text = uploaded_file.read().decode("utf-8")
+        plain_text = uploaded_file.read().decode("utf-8", errors="ignore")
         doc = docx.Document()
-        for line in text.split("\n"):
+        for line in plain_text.split("\n"):
             doc.add_paragraph(line)
         doc_io = io.BytesIO()
         doc.save(doc_io)
         doc_io.seek(0)
-        return doc_io, len(text)
+        return doc_io, plain_text, len(plain_text)
     else:
         doc = docx.Document()
         doc.add_paragraph("不支持的文件格式。")
         doc_io = io.BytesIO()
         doc.save(doc_io)
         doc_io.seek(0)
-        return doc_io, 0
+        return doc_io, "不支持的文件格式。", 0
 
 def parse_pdf_to_docx(pdf_bytes, start_page=1, end_page=None):
     """
