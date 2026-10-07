@@ -1,6 +1,9 @@
 # app.py
 import streamlit as st
 import os
+import io
+import docx
+from openai import OpenAI
 from utils.pdf_parser import extract_text_from_file
 from utils.translator import translate_chunk
 from utils.glossary_loader import load_glossary_from_csv, get_dynamic_glossary_prompt
@@ -12,8 +15,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📖 麻醉学专业文档智能翻译系统 (Word 图文混排版)")
-st.markdown("支持上传 **PDF（自动保持图文排版与图片内嵌）、Word (.docx)、Markdown (.md)、TXT** 格式的教材与文献，结合内置麻醉学专业术语库进行高质量学术翻译。")
+st.title("📖 麻醉学专业文档智能翻译系统 (Word 图文混排中文版)")
+st.markdown("支持上传 **PDF（自动保持图文排版与图片提取）、Word (.docx)、Markdown (.md)、TXT** 格式的教材与文献，结合内置麻醉学专业术语库进行高质量学术翻译。")
 
 # 加载本地麻醉学术语库
 glossary_df = load_glossary_from_csv()
@@ -72,10 +75,10 @@ if uploaded_file is not None:
     uploaded_file.seek(0)
     file_extension = uploaded_file.name.split('.')[-1].lower()
     
-    # 1. 预先设置默认页码，如果是 PDF 则通过交互式输入框或动态获取
+    # 1. 预先设置默认页码
     start_page, end_page = 1, 10
     
-    # 先做一次初步解析以获取总页数、文本及图文混排
+    # 先做一次初步解析以获取总页数或文本长度
     with st.spinner("正在解析文档结构及图文混排..."):
         target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
     
@@ -88,25 +91,18 @@ if uploaded_file is not None:
             start_page = st.number_input("起始页码", min_value=1, value=1)
         with col2:
             end_page = st.number_input("结束页码", min_value=1, value=min(10, total_units))
-            
-        # 如果用户修改了页码，重新根据页码范围生成对应的 Word 文档流
-        if st.sidebar.button("🔄 更新页码范围"):
-            uploaded_file.seek(0)
-            with st.spinner("正在按新页码范围重新生成排版..."):
-                target_doc_io, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
-            st.sidebar.success("已更新页面范围！")
 
-    st.info(f"📄 成功生成排版规整、内嵌图片的 Word 文档！预估处理单元: {total_units}")
+    st.info(f"📄 成功解析文档！预估总页数/单元: {total_units}")
     
-    if st.button("🚀 开始智能翻译", type="primary"):
+    if st.button("🚀 开始智能翻译并生成中文 Word", type="primary"):
         if not api_key:
             st.error("请先在左侧侧边栏输入有效的 API Key！")
         else:
             uploaded_file.seek(0)
-            # 重新提取当前指定页码范围的纯文本用于大模型分块翻译
-            # 重新提取当前指定页码范围的 Word 流与文本
-            uploaded_file.seek(0)
-            target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
+            
+            # 重新提取当前指定页码范围的 Word 流与纯文本
+            with st.spinner("正在按指定页码解析文档内容与图文..."):
+                target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
             
             # 按字符数分块处理大文本
             chunks = [target_text[i:i + chunk_size] for i in range(0, len(target_text), chunk_size)]
@@ -143,16 +139,29 @@ if uploaded_file is not None:
                 
                 progress_bar.progress((idx + 1) / total_chunks)
                 
-            status_text.text("✨ 翻译全部完成！")
+            status_text.text("✨ 翻译全部完成，正在打包生成中文 Word 文档...")
+            
+            # 将翻译后的文本写入新的 Word 文档
+            final_doc = docx.Document()
             final_markdown = "\n\n".join(translated_result)
             
-            st.subheader("📋 翻译结果预览 (Markdown 包含图文排版)")
+            for paragraph_text in final_markdown.split("\n"):
+                if paragraph_text.strip():
+                    final_doc.add_paragraph(paragraph_text)
+            
+            translated_doc_io = io.BytesIO()
+            final_doc.save(translated_doc_io)
+            translated_doc_io.seek(0)
+            
+            status_text.text("✅ 中文翻译版 Word 生成完毕！")
+            
+            st.subheader("📋 翻译结果预览 (Markdown 格式)")
             st.markdown(final_markdown, unsafe_allow_html=True)
             
             st.download_button(
-                label="📥 下载排版完美的 Word 文档 (.docx)",
-                data=target_doc_io,
-                file_name=f"{uploaded_file.name}_translated.docx",
+                label="📥 下载翻译完成的 Word 文档 (.docx)",
+                data=translated_doc_io,
+                file_name=f"{uploaded_file.name}_translated_zh.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
 else:
