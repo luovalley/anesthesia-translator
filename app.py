@@ -3,7 +3,7 @@ import streamlit as st
 import os
 import io
 import docx
-from openai import OpenAI
+from docx.shared import Inches
 from utils.pdf_parser import extract_text_from_file
 from utils.translator import translate_chunk
 from utils.glossary_loader import load_glossary_from_csv, get_dynamic_glossary_prompt
@@ -15,8 +15,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📖 麻醉学专业文档智能翻译系统 (Word 图文混排中文版)")
-st.markdown("支持上传 **PDF（自动保持图文排版与图片提取）、Word (.docx)、Markdown (.md)、TXT** 格式的教材与文献，结合内置麻醉学专业术语库进行高质量学术翻译。")
+st.title("📖 麻醉学专业文档智能翻译系统 (Word 完美图文混排版)")
+st.markdown("支持上传 **PDF（自动保持双栏图文排版与图片内嵌）、Word、Markdown、TXT** 格式的教材与文献，结合专业术语库进行高质量翻译。")
 
 # 加载本地麻醉学术语库
 glossary_df = load_glossary_from_csv()
@@ -68,21 +68,19 @@ with st.sidebar:
         help="使用免费模型时建议调大间隔（如 3-5 秒），避免并发过高导致 429 超限。"
     )
 
-# 文件上传组件（支持 PDF、Word、Markdown、TXT）
+# 文件上传组件
 uploaded_file = st.file_uploader("请上传英文麻醉学教材或文档", type=["pdf", "md", "docx", "txt"])
 
 if uploaded_file is not None:
     uploaded_file.seek(0)
     file_extension = uploaded_file.name.split('.')[-1].lower()
     
-    # 1. 预先设置默认页码
     start_page, end_page = 1, 10
     
-    # 先做一次初步解析以获取总页数或文本长度
-    with st.spinner("正在解析文档结构及图文混排..."):
-        target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
+    # 初步解析获取总页数
+    with st.spinner("正在解析文档结构及图文位置..."):
+        _, _, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
     
-    # 针对 PDF 允许选页
     if file_extension == 'pdf':
         st.sidebar.markdown("---")
         st.sidebar.subheader("📄 PDF 页码范围设置")
@@ -94,17 +92,17 @@ if uploaded_file is not None:
 
     st.info(f"📄 成功解析文档！预估总页数/单元: {total_units}")
     
-    if st.button("🚀 开始智能翻译并生成中文 Word", type="primary"):
+    if st.button("🚀 开始智能翻译并生成图文混排 Word", type="primary"):
         if not api_key:
             st.error("请先在左侧侧边栏输入有效的 API Key！")
         else:
             uploaded_file.seek(0)
             
-            # 重新提取当前指定页码范围的 Word 流与纯文本
-            with st.spinner("正在按指定页码解析文档内容与图文..."):
-                target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
+            # 提取指定页码的文本（带图片占位符）与图片列表
+            with st.spinner("正在提取图文混排数据..."):
+                target_text, image_list, _ = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
             
-            # 按字符数分块处理大文本
+            # 分块处理文本
             chunks = [target_text[i:i + chunk_size] for i in range(0, len(target_text), chunk_size)]
             
             translated_result = []
@@ -139,29 +137,42 @@ if uploaded_file is not None:
                 
                 progress_bar.progress((idx + 1) / total_chunks)
                 
-            status_text.text("✨ 翻译全部完成，正在打包生成中文 Word 文档...")
+            status_text.text("✨ 翻译完成，正在组装图文混排 Word 文档...")
             
-            # 将翻译后的文本写入新的 Word 文档
+            # 组装 Word：将翻译后的文本逐行扫描，遇到 [IMAGE_EMBED] 时自动插入图片
             final_doc = docx.Document()
             final_markdown = "\n\n".join(translated_result)
             
-            for paragraph_text in final_markdown.split("\n"):
-                if paragraph_text.strip():
-                    final_doc.add_paragraph(paragraph_text)
+            image_index = 0
+            for line in final_markdown.split("\n"):
+                stripped_line = line.strip()
+                if "[IMAGE_EMBED]" in stripped_line:
+                    # 如果有缓存的图片，按顺序内嵌到 Word 中
+                    if image_index < len(image_list):
+                        try:
+                            img_stream = io.BytesIO(image_list[image_index])
+                            final_doc.add_picture(img_stream, width=Inches(4.5))
+                            image_index += 1
+                        except Exception:
+                            final_doc.add_paragraph("[图片加载失败]")
+                    else:
+                        final_doc.add_paragraph("[图片缺失]")
+                elif stripped_line:
+                    final_doc.add_paragraph(stripped_line)
             
             translated_doc_io = io.BytesIO()
             final_doc.save(translated_doc_io)
             translated_doc_io.seek(0)
             
-            status_text.text("✅ 中文翻译版 Word 生成完毕！")
+            status_text.text("✅ 带内嵌图片的中文翻译版 Word 生成完毕！")
             
             st.subheader("📋 翻译结果预览 (Markdown 格式)")
             st.markdown(final_markdown, unsafe_allow_html=True)
             
             st.download_button(
-                label="📥 下载翻译完成的 Word 文档 (.docx)",
+                label="📥 下载图文完美的 Word 文档 (.docx)",
                 data=translated_doc_io,
-                file_name=f"{uploaded_file.name}_translated_zh.docx",
+                file_name=f"{uploaded_file.name}_translated_with_images.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
 else:
