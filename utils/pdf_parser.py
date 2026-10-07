@@ -1,12 +1,11 @@
 # utils/pdf_parser.py
-import io
 import fitz  # PyMuPDF
 import docx
 
 def extract_structured_content(uploaded_file, start_page=1, end_page=None):
     """
-    升级版解析器：不仅提取文本，还将每一页整体渲染为高清排版图片，
-    确保文献中的所有图表、曲线、双栏排版 100% 完美保留。
+    针对 Markdown 输出优化的解析器：
+    精确解析 PDF、Word、MD、TXT，按阅读顺序提取纯文本。
     """
     file_name = uploaded_file.name
     file_extension = file_name.split(".")[-1].lower()
@@ -26,26 +25,19 @@ def extract_structured_content(uploaded_file, start_page=1, end_page=None):
         
         for page_num in range(start_idx, end_idx):
             page = doc[page_num]
-            elements.append({"type": "text", "content": f"\n--- Page {page_num + 1} ---\n"})
+            # 标记页面头部，方便在 Markdown 中划分层次
+            elements.append({"type": "text", "content": f"\n\n## Page {page_num + 1}\n"})
             
-            # 1. 提取文本块
+            # 获取文本块并按垂直(y0)、水平(x0)坐标排序，完美兼顾医学文献的双栏排版
             blocks = page.get_text("blocks")
             sorted_blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
             
             for b in sorted_blocks:
                 block_type = b[6] if len(b) > 6 else 0
-                if block_type == 0:
+                if block_type == 0:  # 纯文本块
                     text = b[4].strip()
                     if text:
                         elements.append({"type": "text", "content": text})
-            
-            # 2. 将整页渲染为高清晰度图片（DIP 缩放 2.0，保证图表与公式清晰）
-            try:
-                pix = page.get_pixmap(dpi=150)
-                page_img_bytes = pix.tobytes("png")
-                elements.append({"type": "image", "data": page_img_bytes})
-            except Exception:
-                pass
                         
         return elements, total_pages
         
