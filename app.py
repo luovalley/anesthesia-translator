@@ -136,8 +136,8 @@ if uploaded_file is not None:
             st.markdown(final_markdown, unsafe_allow_html=True)
             
             st.download_button(
-                label="📥 下载翻译后的 Markdown 文件",
-                data=final_markdown,
-                file_name=f"Anesthesia_Translation_{uploaded_file.name}.md",
-                mime="text/markdown"
+                label="📥 下载排版完美的 Word 文档 (.docx)",
+                data=target_doc_io,
+                file_name=f"{uploaded_file.name}_translated.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
