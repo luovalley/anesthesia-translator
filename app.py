@@ -73,9 +73,9 @@ if uploaded_file is not None:
     file_extension = uploaded_file.name.split('.')[-1].lower()
     
     with st.spinner("正在解析文档内容及图文混排结构..."):
-        full_text, total_units = extract_text_from_file(uploaded_file)
+        doc_io, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
         
-    st.info(f"📄 文档解析成功！格式: **.{file_extension}**，文本总长度约 {len(full_text)} 字符。")
+    st.info(f"📄 成功生成排版規整、内嵌图片的 Word 文档！预估处理单元: {total_units}")
     
     # 针对 PDF 允许选页，如果是其他文档则直接全文分块
     start_page, end_page = 1, 1
