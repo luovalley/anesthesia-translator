@@ -75,9 +75,9 @@ if uploaded_file is not None:
     # 1. 预先设置默认页码，如果是 PDF 则通过交互式输入框或动态获取
     start_page, end_page = 1, 10
     
-    # 先做一次初步解析以获取总页数或文本长度
+    # 先做一次初步解析以获取总页数、文本及图文混排
     with st.spinner("正在解析文档结构及图文混排..."):
-        target_doc_io, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
+        target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
     
     # 针对 PDF 允许选页
     if file_extension == 'pdf':
@@ -104,12 +104,9 @@ if uploaded_file is not None:
         else:
             uploaded_file.seek(0)
             # 重新提取当前指定页码范围的纯文本用于大模型分块翻译
-            if file_extension == 'pdf':
-                # 临时调用纯文本解析或从 doc 中提取文本进行翻译
-                target_text, _ = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
-            else:
-                uploaded_file.seek(0)
-                target_text = uploaded_file.read().decode("utf-8", errors="ignore")
+            # 重新提取当前指定页码范围的 Word 流与文本
+            uploaded_file.seek(0)
+            target_doc_io, target_text, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
             
             # 按字符数分块处理大文本
             chunks = [target_text[i:i + chunk_size] for i in range(0, len(target_text), chunk_size)]
