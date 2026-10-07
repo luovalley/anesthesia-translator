@@ -2,21 +2,27 @@
 import streamlit as st
 import os
 import io
-import docx
-from docx.shared import Inches
+from openai import OpenAI
 from utils.pdf_parser import extract_text_from_file
 from utils.translator import translate_chunk
 from utils.glossary_loader import load_glossary_from_csv, get_dynamic_glossary_prompt
 
+# ReportLab PDF 生成相关库
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
 # 页面基础配置
 st.set_page_config(
-    page_title="麻醉学教材多格式文档智能翻译系统",
+    page_title="麻醉学教材多格式文档智能翻译系统 (PDF版)",
     page_icon="📖",
     layout="wide"
 )
 
-st.title("📖 麻醉学专业文档智能翻译系统 (Word 完美图文混排版)")
-st.markdown("支持上传 **PDF（自动保持双栏图文排版与图片内嵌）、Word、Markdown、TXT** 格式的教材与文献，结合专业术语库进行高质量翻译。")
+st.title("📖 麻醉学专业文档智能翻译系统 (PDF 图文高精度排版版)")
+st.markdown("支持上传 **PDF（自动保持图文混排与图片内嵌）、Word、Markdown、TXT**，翻译后直接生成排版精美的专业学术 PDF 文档。")
 
 # 加载本地麻醉学术语库
 glossary_df = load_glossary_from_csv()
@@ -71,13 +77,66 @@ with st.sidebar:
 # 文件上传组件
 uploaded_file = st.file_uploader("请上传英文麻醉学教材或文档", type=["pdf", "md", "docx", "txt"])
 
+def build_pdf_from_text_and_images(text_content, image_list, output_io):
+    """使用 ReportLab 生成排版精美的 PDF，支持中文与图文混排"""
+    doc = SimpleDocTemplate(output_io, pagesize=letter, rightMargin=40, leftMargin=40, topMargin=40, bottomMargin=40)
+    styles = getSampleStyleSheet()
+    
+    # 适配 Linux/Streamlit 云端常见的中文字体路径
+    font_paths = [
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
+    ]
+    
+    font_name = "Helvetica" # 默认英文字体兜底
+    for path in font_paths:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont('CustomChineseFont', path))
+                font_name = 'CustomChineseFont'
+                break
+            except Exception:
+                pass
+                
+    chinese_style = ParagraphStyle(
+        'ChineseStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=10,
+        leading=14,
+        spaceAfter=6
+    )
+    
+    story = []
+    image_idx = 0
+    
+    for line in text_content.split("\n"):
+        line = line.strip()
+        if "[IMAGE_EMBED]" in line:
+            if image_idx < len(image_list):
+                try:
+                    img_stream = io.BytesIO(image_list[image_idx])
+                    # 按照页面宽度自适应插入图片
+                    img = RLImage(img_stream, width=400, height=250)
+                    story.append(img)
+                    story.append(Spacer(1, 8))
+                    image_idx += 1
+                except Exception:
+                    story.append(Paragraph("[图片渲染失败]", chinese_style))
+        elif line:
+            # 替换 HTML 特殊字符防止解析报错
+            safe_line = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            story.append(Paragraph(safe_line, chinese_style))
+            
+    doc.build(story)
+
 if uploaded_file is not None:
     uploaded_file.seek(0)
     file_extension = uploaded_file.name.split('.')[-1].lower()
     
     start_page, end_page = 1, 10
     
-    # 初步解析获取总页数
     with st.spinner("正在解析文档结构及图文位置..."):
         _, _, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
     
@@ -92,17 +151,15 @@ if uploaded_file is not None:
 
     st.info(f"📄 成功解析文档！预估总页数/单元: {total_units}")
     
-    if st.button("🚀 开始智能翻译并生成图文混排 Word", type="primary"):
+    if st.button("🚀 开始智能翻译并生成图文排版 PDF", type="primary"):
         if not api_key:
             st.error("请先在左侧侧边栏输入有效的 API Key！")
         else:
             uploaded_file.seek(0)
             
-            # 提取指定页码的文本（带图片占位符）与图片列表
             with st.spinner("正在提取图文混排数据..."):
                 target_text, image_list, _ = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
             
-            # 分块处理文本
             chunks = [target_text[i:i + chunk_size] for i in range(0, len(target_text), chunk_size)]
             
             translated_result = []
@@ -137,43 +194,25 @@ if uploaded_file is not None:
                 
                 progress_bar.progress((idx + 1) / total_chunks)
                 
-            status_text.text("✨ 翻译完成，正在组装图文混排 Word 文档...")
+            status_text.text("✨ 翻译完成，正在通过 ReportLab 渲染精美 PDF 文档...")
             
-            # 组装 Word：将翻译后的文本逐行扫描，遇到 [IMAGE_EMBED] 时自动插入图片
-            final_doc = docx.Document()
             final_markdown = "\n\n".join(translated_result)
             
-            image_index = 0
-            for line in final_markdown.split("\n"):
-                stripped_line = line.strip()
-                if "[IMAGE_EMBED]" in stripped_line:
-                    # 如果有缓存的图片，按顺序内嵌到 Word 中
-                    if image_index < len(image_list):
-                        try:
-                            img_stream = io.BytesIO(image_list[image_index])
-                            final_doc.add_picture(img_stream, width=Inches(4.5))
-                            image_index += 1
-                        except Exception:
-                            final_doc.add_paragraph("[图片加载失败]")
-                    else:
-                        final_doc.add_paragraph("[图片缺失]")
-                elif stripped_line:
-                    final_doc.add_paragraph(stripped_line)
+            # 生成 PDF 内存流
+            pdf_output_io = io.BytesIO()
+            build_pdf_from_text_and_images(final_markdown, image_list, pdf_output_io)
+            pdf_output_io.seek(0)
             
-            translated_doc_io = io.BytesIO()
-            final_doc.save(translated_doc_io)
-            translated_doc_io.seek(0)
-            
-            status_text.text("✅ 带内嵌图片的中文翻译版 Word 生成完毕！")
+            status_text.text("✅ 图文混排 PDF 讲义生成完毕！")
             
             st.subheader("📋 翻译结果预览 (Markdown 格式)")
             st.markdown(final_markdown, unsafe_allow_html=True)
             
             st.download_button(
-                label="📥 下载图文完美的 Word 文档 (.docx)",
-                data=translated_doc_io,
-                file_name=f"{uploaded_file.name}_translated_with_images.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                label="📥 下载排版完美的 PDF 文档 (.pdf)",
+                data=pdf_output_io,
+                file_name=f"{uploaded_file.name}_translated_layout.pdf",
+                mime="application/pdf"
             )
 else:
     st.info("👈 请在上方上传需要处理的医学文献或教材文件。")
