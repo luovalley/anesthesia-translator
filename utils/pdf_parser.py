@@ -1,52 +1,67 @@
 import os
+import io
 import fitz  # PyMuPDF
 import docx
+from docx.shared import Inches
 
 def extract_text_from_file(uploaded_file, start_page=1, end_page=None):
     """
-    适配 app.py 调用的统一入口，支持指定页码范围解析
+    适配 app.py 调用的统一入口：改为直接生成 Word 文档对象或字节流
     """
     file_name = uploaded_file.name
     file_extension = file_name.split(".")[-1].lower()
     
     if file_extension == "pdf":
         pdf_bytes = uploaded_file.read()
-        text = parse_pdf_with_layout(pdf_bytes, start_page=start_page, end_page=end_page)
+        doc_io = parse_pdf_to_docx(pdf_bytes, start_page=start_page, end_page=end_page)
+        # 估算大体字数用于进度条
+        total_units = 5000 
+        return doc_io, total_units
     elif file_extension in ["docx", "doc"]:
-        doc = docx.Document(uploaded_file)
-        text = "\n".join([p.text for p in doc.paragraphs])
+        # 如果本身就是 docx，直接返回原文件字节流
+        return io.BytesIO(uploaded_file.read()), 1000
     elif file_extension in ["md", "txt"]:
+        # 将文本转为简单的 Word 文档
         text = uploaded_file.read().decode("utf-8")
+        doc = docx.Document()
+        for line in text.split("\n"):
+            doc.add_paragraph(line)
+        doc_io = io.BytesIO()
+        doc.save(doc_io)
+        doc_io.seek(0)
+        return doc_io, len(text)
     else:
-        text = "不支持的文件格式。"
-        
-    total_units = len(text)
-    return text, total_units
+        doc = docx.Document()
+        doc.add_paragraph("不支持的文件格式。")
+        doc_io = io.BytesIO()
+        doc.save(doc_io)
+        doc_io.seek(0)
+        return doc_io, 0
 
-def parse_pdf_with_layout(pdf_bytes, output_image_dir="extracted_images", start_page=1, end_page=None):
+def parse_pdf_to_docx(pdf_bytes, start_page=1, end_page=None):
     """
-    针对双栏医学文献优化的 PDF 坐标块与图文混排解析器（支持页码范围）
+    针对双栏医学文献优化的 PDF 解析器：直接生成排版规整、图片内嵌的 Word 文档
     """
-    os.makedirs(output_image_dir, exist_ok=True)
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    full_markdown_content = []
+    output_doc = docx.Document()
 
     total_pages = len(doc)
-    # 处理页码索引（用户输入的页码从 1 开始，转换为从 0 开始的索引）
     start_idx = max(0, start_page - 1)
     end_idx = min(total_pages, end_page) if end_page else total_pages
 
     for page_num in range(start_idx, end_idx):
         page = doc[page_num]
-        full_markdown_content.append(f"\n\n<!-- Page {page_num + 1} -->\n")
+        output_doc.add_heading(f"--- Page {page_num + 1} ---", level=3)
         
         page_width = page.rect.width
         mid_x = page_width / 2.0
 
+        # 获取文本块
         blocks = page.get_text("blocks", sort=True)
         
+        # 提取页面内嵌图片及其坐标
         image_list = page.get_images(full=True)
-        image_rects = []
+        image_elements = []
         for img_index, img_info in enumerate(image_list):
             xref = img_info[0]
             rects = page.get_image_rects(xref)
@@ -54,20 +69,21 @@ def parse_pdf_with_layout(pdf_bytes, output_image_dir="extracted_images", start_
                 pix = fitz.Pixmap(doc, xref)
                 if pix.n >= 5:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
-                img_filename = f"page_{page_num + 1}_img_{xref}_{img_index}.png"
-                img_path = os.path.join(output_image_dir, img_filename)
-                pix.save(img_path)
+                img_bytes = pix.tobytes("png")
                 pix = None
                 
-                image_rects.append({
+                col = 0 if r.x0 < mid_x else 1
+                image_elements.append({
                     "y0": r.y0,
                     "x0": r.x0,
-                    "y1": r.y1,
-                    "path": img_path
+                    "col": col,
+                    "type": "image",
+                    "bytes": img_bytes
                 })
 
         page_elements = []
 
+        # 收集文本元素
         for b in blocks:
             x0, y0, x1, y1, text, block_no, block_type = b
             if block_type == 0:
@@ -83,19 +99,26 @@ def parse_pdf_with_layout(pdf_bytes, output_image_dir="extracted_images", start_
                     "content": cleaned_text
                 })
 
-        for img in image_rects:
-            col = 0 if img["x0"] < mid_x else 1
-            img_markdown = f"\n\n![Figure]({img['path']})\n\n"
-            page_elements.append({
-                "y0": img["y0"],
-                "x0": img["x0"],
-                "col": col,
-                "type": "image",
-                "content": img_markdown
-            })
+        # 合并图片元素
+        page_elements.extend(image_elements)
 
+        # 双栏排序：先按左右栏 (col)，再按垂直高度 (y0)
         page_elements.sort(key=lambda e: (e["col"], e["y0"]))
-        page_text_blocks = [elem["content"] for elem in page_elements]
-        full_markdown_content.extend(page_text_blocks)
 
-    return "\n\n".join(full_markdown_content)
+        # 依次写入 Word 文档
+        for elem in page_elements:
+            if elem["type"] == "text":
+                output_doc.add_paragraph(elem["content"])
+            elif elem["type"] == "image":
+                try:
+                    image_stream = io.BytesIO(elem["bytes"])
+                    # 在 Word 中插入图片并限定最大宽度，防止过大
+                    output_doc.add_picture(image_stream, width=Inches(4.5))
+                except Exception as e:
+                    print(f"插入图片失败: {e}")
+
+    # 将生成的 Word 保存到内存字节流中
+    doc_io = io.BytesIO()
+    output_doc.save(doc_io)
+    doc_io.seek(0)
+    return doc_io
