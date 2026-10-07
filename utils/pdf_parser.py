@@ -2,21 +2,28 @@ import os
 import fitz  # PyMuPDF
 import docx
 
-def extract_text_from_file(uploaded_file, file_extension):
+def extract_text_from_file(uploaded_file):
     """
-    通用文件解析入口：支持 PDF（双栏智能图文混排）、Word、Markdown、TXT
+    适配 app.py 调用的统一入口
     """
+    # 获取文件扩展名
+    file_name = uploaded_file.name
+    file_extension = file_name.split(".")[-1].lower()
+    
     if file_extension == "pdf":
-        # 将 Streamlit 上传的文件对象转换为字节流供 PyMuPDF 读取
         pdf_bytes = uploaded_file.read()
-        return parse_pdf_with_layout(pdf_bytes)
+        text = parse_pdf_with_layout(pdf_bytes)
     elif file_extension in ["docx", "doc"]:
         doc = docx.Document(uploaded_file)
-        return "\n".join([p.text for p in doc.paragraphs])
+        text = "\n".join([p.text for p in doc.paragraphs])
     elif file_extension in ["md", "txt"]:
-        return uploaded_file.read().decode("utf-8")
+        text = uploaded_file.read().decode("utf-8")
     else:
-        return "不支持的文件格式。"
+        text = "不支持的文件格式。"
+        
+    # 估算翻译单元（例如按字符数或段落数），供 app.py 进度条使用
+    total_units = len(text)
+    return text, total_units
 
 def parse_pdf_with_layout(pdf_bytes, output_image_dir="extracted_images"):
     """
