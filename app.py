@@ -12,8 +12,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📖 麻醉学专业文档 Markdown 智能翻译系统")
-st.markdown("支持上传 **PDF（自动保持图文排版与图片提取）、Word (.docx)、Markdown (.md)、TXT** 格式的教材与文献，结合内置麻醉学专业术语库进行高质量学术翻译。")
+st.title("📖 麻醉学专业文档智能翻译系统 (Word 图文混排版)")
+st.markdown("支持上传 **PDF（自动保持图文排版与图片内嵌）、Word (.docx)、Markdown (.md)、TXT** 格式的教材与文献，结合内置麻醉学专业术语库进行高质量学术翻译。")
 
 # 加载本地麻醉学术语库
 glossary_df = load_glossary_from_csv()
@@ -72,30 +72,44 @@ if uploaded_file is not None:
     uploaded_file.seek(0)
     file_extension = uploaded_file.name.split('.')[-1].lower()
     
-    with st.spinner("正在解析文档内容及图文混排结构..."):
-        doc_io, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
-        
-    st.info(f"📄 成功生成排版規整、内嵌图片的 Word 文档！预估处理单元: {total_units}")
+    # 1. 预先设置默认页码，如果是 PDF 则通过交互式输入框或动态获取
+    start_page, end_page = 1, 10
     
-    # 针对 PDF 允许选页，如果是其他文档则直接全文分块
-    start_page, end_page = 1, 1
+    # 先做一次初步解析以获取总页数或文本长度
+    with st.spinner("正在解析文档结构及图文混排..."):
+        target_doc_io, total_units = extract_text_from_file(uploaded_file, start_page=1, end_page=None)
+    
+    # 针对 PDF 允许选页
     if file_extension == 'pdf':
-        col1, col2 = st.columns(2)
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📄 PDF 页码范围设置")
+        col1, col2 = st.sidebar.columns(2)
         with col1:
-            start_page = st.number_input("起始页码", min_value=1, max_value=total_units, value=1)
+            start_page = st.number_input("起始页码", min_value=1, value=1)
         with col2:
-            end_page = st.number_input("结束页码", min_value=1, max_value=total_units, value=min(10, total_units))
+            end_page = st.number_input("结束页码", min_value=1, value=min(10, total_units))
             
+        # 如果用户修改了页码，重新根据页码范围生成对应的 Word 文档流
+        if st.sidebar.button("🔄 更新页码范围"):
+            uploaded_file.seek(0)
+            with st.spinner("正在按新页码范围重新生成排版..."):
+                target_doc_io, total_units = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
+            st.sidebar.success("已更新页面范围！")
+
+    st.info(f"📄 成功生成排版规整、内嵌图片的 Word 文档！预估处理单元: {total_units}")
+    
     if st.button("🚀 开始智能翻译", type="primary"):
         if not api_key:
             st.error("请先在左侧侧边栏输入有效的 API Key！")
         else:
             uploaded_file.seek(0)
-            # 如果是 PDF，按用户选择的页码重新提取图文混排结构
+            # 重新提取当前指定页码范围的纯文本用于大模型分块翻译
             if file_extension == 'pdf':
+                # 临时调用纯文本解析或从 doc 中提取文本进行翻译
                 target_text, _ = extract_text_from_file(uploaded_file, start_page=start_page, end_page=end_page)
             else:
-                target_text = full_text
+                uploaded_file.seek(0)
+                target_text = uploaded_file.read().decode("utf-8", errors="ignore")
             
             # 按字符数分块处理大文本
             chunks = [target_text[i:i + chunk_size] for i in range(0, len(target_text), chunk_size)]
@@ -105,6 +119,9 @@ if uploaded_file is not None:
             status_text = st.empty()
             
             total_chunks = len(chunks)
+            if total_chunks == 0:
+                total_chunks = 1
+                chunks = [target_text]
             
             for idx, chunk in enumerate(chunks):
                 status_text.text(f"正在翻译第 {idx + 1} / {total_chunks} 个文本块（已包含限速缓冲）...")
@@ -141,3 +158,5 @@ if uploaded_file is not None:
                 file_name=f"{uploaded_file.name}_translated.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
+else:
+    st.info("👈 请在上方上传需要处理的医学文献或教材文件。")
