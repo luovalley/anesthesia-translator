@@ -6,6 +6,9 @@ from utils.pdf_parser import extract_structured_content
 from utils.translator import translate_chunk
 from utils.glossary_loader import load_glossary_from_csv, get_dynamic_glossary_prompt
 
+# 这里虽叫 load_glossary_from_csv，但在更新后的 loader 中会自动优先寻找并解析 glossary.md
+glossary_df = load_glossary_from_csv("glossary.md")
+
 st.set_page_config(
     page_title="麻醉学文献智能翻译系统 (Markdown版)",
     page_icon="📖",
