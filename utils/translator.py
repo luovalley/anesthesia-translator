@@ -2,6 +2,51 @@
 import time
 from openai import OpenAI
 from openai import RateLimitError, APIError
+import requests
+
+def translate_chunk(text_chunk, api_key, base_url, model_name, glossary_prompt="", request_delay=3.0):
+    """
+    调用 OpenRouter/DeepSeek 等大模型 API 进行专业翻译。
+    内置规则：遇到英文参考文献、文献引用标号或出处信息时，保持英文原文不翻译。
+    """
+    system_prompt = (
+        "你是一个顶级的医学与麻醉学专业翻译引擎。请将输入的英文文献段落翻译为符合中国国家标准的专业中文医学学术语言。\n"
+        "【核心翻译规则】\n"
+        "1. 术语对齐：严格遵循提供的专业术语对照。\n"
+        "2. **参考文献不翻译**：如果文本块属于参考文献列表（References）、带有期刊名称、卷期页码、作者列表以及密集的文献引用编号（例如形如 '17,23', 'Clin J Pain 2021; 37: 12-20' 等），**请直接保留英文原文，不要将其翻译成中文**。\n"
+        "3. 保持 Markdown 格式与段落结构不变。"
+    )
+    
+    user_content = f"{glossary_prompt}\n\n【待翻译英文文本】：\n{text_chunk}"
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/anesthesia-translator", 
+        "X-Title": "Anesthesia Translator"
+    }
+    
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        "temperature": 0.1
+    }
+    
+    # 控制请求间隔，防止触发 API 频率限制
+    time.sleep(request_delay)
+    
+    try:
+        response = requests.post(f"{base_url.rstrip('/')}/chat/completions", headers=headers, json=payload, timeout=60)
+        if response.status_code == 200:
+            res_json = response.json()
+            return res_json["choices"][0]["message"]["content"].strip()
+        else:
+            raise Exception(f"API 请求失败 [状态码 {response.status_code}]: {response.text}")
+    except Exception as e:
+        raise Exception(f"翻译大模型调用异常: {str(e)}")
 
 def translate_chunk(text_chunk, api_key, base_url, model_name, glossary_prompt="", request_delay=3.0):
     """
