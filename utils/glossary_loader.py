@@ -4,10 +4,10 @@ import pandas as pd
 
 def load_glossary(file_path="glossary.md"):
     """
-    通用术语表加载函数，支持加载 Markdown (.md) 或 CSV 格式的术语库。
+    通用术语表加载函数，完美支持列表格式 (如 * English — Chinese) 
+    以及 Markdown 表格和键值对格式。
     """
     if not os.path.exists(file_path):
-        # 如果指定的文件不存在，尝试寻找默认的备用文件
         fallback = "anesthesia_glossary.csv"
         if os.path.exists(fallback):
             file_path = fallback
@@ -24,18 +24,37 @@ def load_glossary(file_path="glossary.md"):
                 
             for line in lines:
                 line = line.strip()
-                # 匹配 Markdown 表格行，例如 | Propofol | 丙泊酚 |
-                if line.startswith("|") and line.endswith("|"):
+                
+                # 1. 适配你当前的格式：* Abdomen — 腹部 或 * Term - 翻译
+                if line.startswith("*") or line.startswith("-"):
+                    # 去除前缀的符号和空格
+                    content = line.lstrip("*-# ").strip()
+                    # 尝试用常用的中英文分隔符（如 — 或 -）进行切分
+                    for sep in ["—", "–", "-"]:
+                        if sep in content:
+                            parts = content.split(sep, 1)
+                            en = parts[0].strip()
+                            zh = parts[1].strip()
+                            if en and zh:
+                                terms.append({"English": en, "Chinese": zh})
+                            break
+                            
+                # 2. 兼容 Markdown 表格格式：| English | Chinese |
+                elif line.startswith("|") and line.endswith("|"):
                     parts = [p.strip() for p in line.split("|")[1:-1]]
                     if len(parts) >= 2 and not all(set(p) <= {"-", ":"} for p in parts):
                         en, zh = parts[0], parts[1]
                         if en and zh and en.lower() != "english" and en.lower() != "术语":
                             terms.append({"English": en, "Chinese": zh})
-                elif ":" in line or "-" in line:
-                    cleaned = line.lstrip("-*# ").strip()
-                    if ":" in cleaned:
-                        parts = cleaned.split(":", 1)
-                        terms.append({"English": parts[0].strip(), "Chinese": parts[1].strip()})
+                            
+                # 3. 兼容冒号格式：English: 中文
+                elif ":" in line:
+                    parts = line.lstrip("-*# ").split(":", 1)
+                    if len(parts) == 2:
+                        en, zh = parts[0].strip(), parts[1].strip()
+                        if en and zh:
+                            terms.append({"English": en, "Chinese": zh})
+                            
             if terms:
                 return pd.DataFrame(terms)
                 
@@ -47,7 +66,6 @@ def load_glossary(file_path="glossary.md"):
         
     return None
 
-# 保留旧函数名作为别名，防止其他地方调用报错
 def load_glossary_from_csv(file_path="anesthesia_glossary.csv"):
     if os.path.exists("glossary.md"):
         return load_glossary("glossary.md")
