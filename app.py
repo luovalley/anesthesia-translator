@@ -1,4 +1,5 @@
 # app.py
+import os
 import streamlit as st
 import requests
 from utils.pdf_parser import extract_structured_content
@@ -18,6 +19,21 @@ FALLBACK_FREE_MODELS = [
     {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B IT", "context_length": 0},
     {"id": "apodex/apodex-1.1-mini:free", "name": "Apodex 1.1 Mini", "context_length": 0},
 ]
+
+
+def load_api_key() -> str:
+    """在后台读取 API Key：优先 st.secrets，其次环境变量。不在界面上显示。"""
+    names = ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
+    try:
+        for n in names:
+            if n in st.secrets and st.secrets[n]:
+                return str(st.secrets[n])
+    except Exception:
+        pass  # 未配置 secrets.toml 时会抛异常，忽略并回退到环境变量
+    for n in names:
+        if os.environ.get(n):
+            return os.environ[n]
+    return ""
 
 
 def _is_free(model: dict) -> bool:
@@ -84,8 +100,11 @@ else:
 
 with st.sidebar:
     st.header("⚙️ 配置面板")
-    default_api_key = st.secrets.get("OPENAI_API_KEY", "") if "OPENAI_API_KEY" in st.secrets else ""
-    api_key = st.text_input("API Key (OpenRouter / DeepSeek)", value=default_api_key, type="password")
+    api_key = load_api_key()
+    if api_key:
+        st.success("🔑 API Key 已从后台加载")
+    else:
+        st.error("❌ 未检测到 API Key，请在 .streamlit/secrets.toml 或环境变量中配置")
     base_url = st.text_input("API Base URL", value="https://openrouter.ai/api/v1")
 
     is_openrouter = "openrouter.ai" in base_url.lower()
@@ -152,7 +171,7 @@ if uploaded_file is not None:
 
     if st.button("🚀 开始智能翻译并生成 Markdown", type="primary"):
         if not api_key:
-            st.error("请先在左侧侧边栏输入有效的 API Key！")
+            st.error("未检测到后台 API Key，请在 .streamlit/secrets.toml 或环境变量中配置后重启应用。")
         else:
             uploaded_file.seek(0)
 
