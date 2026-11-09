@@ -1,6 +1,8 @@
 streamlit
-openai
-pymupdf
 pandas
-reportlab
+openai
+biopython
+requests
+pypdf
 python-docx
+python-dotenv
