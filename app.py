@@ -100,11 +100,23 @@ else:
 
 with st.sidebar:
     st.header("⚙️ 配置面板")
-    api_key = load_api_key()
-    if api_key:
-        st.success("🔑 API Key 已从后台加载")
+    backend_key = load_api_key()
+    manual_key = st.text_input(
+        "API Key（可选，手动输入优先于后台配置）",
+        value="",
+        type="password",
+        placeholder="留空则使用后台配置的 Key",
+    ).strip()
+
+    if manual_key:
+        api_key = manual_key
+        st.info("🔑 正在使用手动输入的 API Key")
+    elif backend_key:
+        api_key = backend_key
+        st.success("🔑 已使用后台配置的 API Key")
     else:
-        st.error("❌ 未检测到 API Key，请在 .streamlit/secrets.toml 或环境变量中配置")
+        api_key = ""
+        st.error("❌ 未检测到后台 API Key，请在上方手动输入，或在 .streamlit/secrets.toml / 环境变量中配置")
     base_url = st.text_input("API Base URL", value="https://openrouter.ai/api/v1")
 
     is_openrouter = "openrouter.ai" in base_url.lower()
@@ -171,7 +183,7 @@ if uploaded_file is not None:
 
     if st.button("🚀 开始智能翻译并生成 Markdown", type="primary"):
         if not api_key:
-            st.error("未检测到后台 API Key，请在 .streamlit/secrets.toml 或环境变量中配置后重启应用。")
+            st.error("未检测到 API Key，请在侧边栏手动输入，或在后台（secrets.toml / 环境变量）配置。")
         else:
             uploaded_file.seek(0)
 
